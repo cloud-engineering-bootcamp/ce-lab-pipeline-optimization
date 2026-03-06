@@ -1,8 +1,5 @@
-node_modules/
-.vscode/
-.idea/
-.DS_Store
-*.log
-.cache/
-dist/
-build/
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
