@@ -11,6 +11,7 @@ on:
     paths:
       - 'terraform/**'
       - '.github/workflows/optimized.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
