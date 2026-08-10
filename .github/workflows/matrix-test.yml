@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'terraform/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,9 +20,9 @@ jobs:
         # 1.6.0 was dropped: it cannot install providers since HashiCorp's
         # GPG signing key expired (2026-04-18) — the matrix job is what caught it.
         terraform_version:
-          - "1.7.0"
-          - "1.8.0"
-          - "1.9.0"
+          - "1.13.1"
+          - "1.13.2"
+          - "1.13.3"
 
     defaults:
       run:
