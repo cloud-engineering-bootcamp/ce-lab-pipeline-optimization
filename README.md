@@ -12,18 +12,23 @@ All numbers below come from real runs in this repository's
 
 ## Pipeline Performance Comparison
 
+All pipelines run **Terraform 1.13.1**. Every measurement below was taken on that version, with the
+provider cache deleted beforehand so the cold numbers are real.
+
 | Metric | Baseline (Slow) | Optimized |
 |--------|-----------------|-----------|
-| Total wall-clock duration | **22 s** ([run](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31367689766)) | **35 s** warm cache ([run](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31368200527)) · 43 s cold ([run](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31367689782)) |
-| Billable job time | 13 s in 1 job | 28 s across 3 jobs |
-| `terraform init` | 4–6 s, **never cached** | 5 s cold → **1–2 s cached** |
+| Total wall-clock duration | **14 s** ([run](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31370828181)) | **29 s** warm cache ([run](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31370981166)) · 34 s cold ([run](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31370828252)) |
+| Billable job time | 12 s in 1 job | 29 s across 3 jobs (36 s cold) |
+| `terraform init` | 5 s, **never cached** | 5 s cold → **1 s cached** |
 | Job structure | 1 sequential job | 3 jobs: `lint` ∥ `validate` → `plan` |
 | Path filtering | none — runs on every change | `terraform/**` + own workflow file only |
-| Version testing | single version (1.7.0) | matrix: 1.7.0, 1.8.0, 1.9.0 in parallel |
+| Version testing | single version (1.13.1) | matrix: 1.13.1, 1.13.2, 1.13.3 in parallel |
 | Docs-only commit | full pipeline runs | **skipped entirely** |
 
 > **Read the wall-clock row carefully.** On this workload the optimized pipeline is *slower*, and
 > that is the honest result — see [Where the optimizations actually pay off](#where-the-optimizations-actually-pay-off).
+>
+> Caching still does its job: warm cache beats cold by 5 s, and `init` drops from 5 s to 1 s.
 
 ---
 
@@ -37,12 +42,13 @@ provider set is unchanged.
 
 | `terraform init` | Duration | Evidence |
 |------------------|----------|----------|
-| Baseline (no cache, every run) | 4–6 s | baseline job, all runs |
-| Optimized, cache miss | 5 s (+3 s to save the cache) | [run 31367689782](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31367689782) |
-| Optimized, cache hit | **1 s** (+2 s to restore) | [run 31368200527](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31368200527) |
+| Baseline (no cache, every run) | 5 s | [run 31370828181](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31370828181) |
+| Optimized, cache miss | 5 s (+5 s to save the cache) | [run 31370828252](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31370828252) |
+| Optimized, cache hit | **1 s** (+2–4 s to restore) | [run 31370981166](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31370981166) |
 
-**~75–80 % faster `init` on a cache hit.** Note that restore/save themselves cost 2–3 s, so with only
-two small providers the net saving is close to zero; the technique scales with provider count and size.
+**80 % faster `init` on a cache hit** (5 s → 1 s). Note that restore/save themselves cost 2–5 s for a
+110 MB entry, so with only two providers the net saving is close to zero; the technique scales with
+provider count and size, not with the number of jobs using it.
 
 Caches are branch-scoped on GitHub: a cache saved on a feature branch is *not* visible to `main`.
 That is why the first `main` run after the merge still missed and had to repopulate it.
@@ -59,9 +65,9 @@ optimized:  lint      ┐
             validate  ┘── plan                       (three runners)
 ```
 
-Measured on [run 31367366139](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31367366139):
-`Format Check` and `Validate` both started at `07:48:30–31Z` — genuinely concurrent — and `plan`
-started at `07:48:53Z`, after both finished.
+Measured on [run 31370828252](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31370828252):
+`Format Check` and `Validate` both started at `08:36:41–42Z` — genuinely concurrent — and `plan`
+started at `08:37:02Z`, after both finished.
 
 Total ≈ `max(lint, validate) + plan` instead of `lint + validate + plan`.
 
@@ -108,9 +114,9 @@ instead of failing the pipeline:
 `strategy.matrix` runs `init` + `validate` + `fmt` against three Terraform versions with
 `fail-fast: false` and per-version cache keys.
 
-[Run 31367366142](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31367366142):
-three versions finished in **21 s wall-clock** (jobs of 12 s, 13 s and 17 s). Run sequentially the
-same work would take ~42 s.
+[Run 31371022376](https://github.com/Draian123/ce-lab-pipeline-optimization/actions/runs/31371022376):
+1.13.1, 1.13.2 and 1.13.3 finished in **30 s wall-clock** (jobs of 19 s, 18 s and 19 s, all with cold
+per-version caches). Run sequentially the same work would take ~56 s.
 
 ![Matrix: three Terraform versions pass in parallel](docs/screenshots/matrix-3-versions-pass.jpg)
 
@@ -129,26 +135,29 @@ tested 1.6.0, 1.7.0 and 1.8.0 — and 1.6.0 failed while the other two passed:
 HashiCorp's release signing key (`72D7468F`) expired on 2026-04-18. Terraform 1.6.0 ships an
 embedded copy of that key and can no longer verify provider signatures; 1.7.0+ can. Without
 `fail-fast: false` the run would have aborted and hidden the fact that only one version was broken.
-Both pipelines were moved to 1.7.0 and 1.6.0 was dropped from the matrix.
+Both pipelines now pin **1.13.1**, and the matrix covers the 1.13.x patch line (1.13.1 / 1.13.2 /
+1.13.3) — close enough together to catch a regression between patch releases, far enough from the
+expired-key era to be usable.
 
 ---
 
 ## Where the optimizations actually pay off
 
-The optimized pipeline takes **more** wall-clock time than the baseline here (35 s vs 22 s), and
+The optimized pipeline takes **more** wall-clock time than the baseline here (29 s vs 14 s), and
 costs **3 billable job-minutes instead of 1** — GitHub bills every job rounded up to the minute.
 
 The reason is workload size. Each extra job pays a fixed toll:
 
 | Fixed per-job cost | Measured |
 |--------------------|----------|
-| Runner provisioning (`Set up job`) | 1–2 s |
+| Runner provisioning (`Set up job`) | 1 s |
 | Checkout + `setup-terraform` | 2 s |
-| Cache restore/save | 2–3 s |
-| Queue wait before a dependent job starts | 3–8 s |
+| Cache restore/save (110 MB) | 2–5 s |
+| Queue wait before a dependent job starts | 2 s |
 
-That is ~10 s of overhead per job. The useful work in this repository — four small resources, no
-real `plan` — is 1–3 s per step, so the overhead dominates and parallelism has nothing to hide.
+That is 5–10 s of overhead per job, paid three times instead of once. The useful work in this
+repository — four small resources, no real `plan` — is 1–5 s per step, so the overhead dominates and
+parallelism has nothing to hide.
 
 Parallelization wins once each stage is longer than the per-job overhead. With a realistic
 `plan` against AWS (~90 s) and a larger provider set:
@@ -161,7 +170,7 @@ Parallelization wins once each stage is longer than the per-job overhead. With a
 | **Total** | **~145 s** | **~120 s**, and 0 s on docs-only commits |
 
 **Conclusion:** caching and path filtering pay off at any size; job splitting only pays off once a
-stage is long enough to outweigh ~10 s of runner overhead. On a pipeline this small, the correct
+stage is long enough to outweigh 5–10 s of runner overhead. On a pipeline this small, the correct
 optimization is the path filter — it removes 100 % of the cost on documentation commits.
 
 ---
@@ -180,6 +189,10 @@ pipeline invocations. Additional levers used or recommended:
 - **Disable dead workflows.** `baseline-slow.yml` was renamed to `.disabled` once the comparison was
   recorded, so it stops consuming minutes.
 - **`concurrency` groups** to cancel superseded runs on rapid pushes (not enabled here).
+- **Watch cache storage, not just minutes.** Each provider cache entry is **110 MB**, and the matrix
+  creates one *per Terraform version*. Three matrix versions plus the shared key is ~440 MB against
+  the 10 GB per-repository limit — GitHub evicts least-recently-used entries once that fills, which
+  silently turns cache hits back into misses.
 - **Merge tiny jobs.** On a pipeline this small, `lint` and `validate` in one job would be both
   faster and cheaper than two.
 
@@ -192,7 +205,7 @@ ce-lab-pipeline-optimization/
 ├── .github/workflows/
 │   ├── baseline-slow.yml.disabled   # anti-pattern reference: sequential, no cache, no filters
 │   ├── optimized.yml                # caching + parallel jobs + path filter + conditional plan
-│   └── matrix-test.yml              # Terraform 1.7 / 1.8 / 1.9 in parallel
+│   └── matrix-test.yml              # Terraform 1.13.1 / 1.13.2 / 1.13.3 in parallel
 ├── terraform/
 │   ├── main.tf                      # S3 logs bucket: versioning, SSE, public access block
 │   ├── variables.tf
@@ -206,7 +219,7 @@ ce-lab-pipeline-optimization/
 
 | Anti-pattern | Cost | Fix |
 |--------------|------|-----|
-| No provider caching | 4–6 s of downloads every run | `actions/cache@v4` |
+| No provider caching | 5 s of downloads every run | `actions/cache@v4` |
 | One sequential job | independent checks wait on each other | split jobs, `needs:` only where real |
 | No path filter | runs on README changes | `paths:` filter |
 | Single Terraform version | version breakage found in production | `strategy.matrix` |
@@ -222,7 +235,7 @@ ce-lab-pipeline-optimization/
    the fastest pipeline is the one that does not run.
 4. **`fail-fast: false` is what makes a matrix useful** — it turned a total failure into the precise
    answer "1.6.0 is broken, 1.7.0 and 1.8.0 are fine".
-5. **Per-job overhead is real** (~10 s on GitHub-hosted runners). Do not split work smaller than it.
+5. **Per-job overhead is real** (5–10 s on GitHub-hosted runners). Do not split work smaller than it.
 
 ## Notes / known limitations
 
