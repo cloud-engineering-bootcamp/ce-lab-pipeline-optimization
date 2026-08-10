@@ -84,6 +84,10 @@ Verified with two pull requests against the same repository:
 | [#1](https://github.com/Draian123/ce-lab-pipeline-optimization/pull/1) | `README.md` only | ✅ ran (16 s wasted) | ⛔ **not triggered** | ⛔ **not triggered** |
 | [#2](https://github.com/Draian123/ce-lab-pipeline-optimization/pull/2) | `terraform/outputs.tf` | ✅ ran | ✅ ran | ✅ ran |
 
+The filter holds on `main` too: the commit that added this README and the screenshots below
+triggered **zero** workflow runs, while the previous commit — which touched `optimized.yml` — ran the
+full pipeline.
+
 PR #1 is the anti-pattern made visible: the unfiltered baseline burned a runner to check Terraform
 files that nobody touched. One check on a documentation-only PR, where the baseline alone would have
 run three:
